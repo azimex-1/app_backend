@@ -50,3 +50,5 @@ class Product(Base, UUIDMixin, TimestampMixin):
     unit: Mapped[str | None] = mapped_column(String(40), nullable=True)  # piece, litre, set...
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    details_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    

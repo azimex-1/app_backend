@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,12 +18,14 @@ class ReceiptPaymentCreate(BaseModel):
 
 
 class ReceiptCreate(BaseModel):
+    customer_id: uuid.UUID | None = None
     customer_name: str = Field(default="Walk-in Customer", max_length=255)
     salesperson: str | None = Field(default=None, max_length=255)
     notes: str | None = Field(default=None, max_length=1000)
     discount_minor: int = Field(default=0, ge=0)
     tax_minor: int = Field(default=0, ge=0)
     total_minor: int | None = Field(default=None, ge=0)
+    credit_minor: int = Field(default=0, ge=0)   # amount intentionally put on the customer's account
     items: list[ReceiptItemCreate] = Field(min_length=1)
     payments: list[ReceiptPaymentCreate] = Field(default_factory=list)
 
@@ -54,6 +56,7 @@ class ReceiptRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     receipt_number: str
+    customer_id: uuid.UUID | None
     customer_name: str | None
     salesperson: str | None
     notes: str | None
@@ -71,8 +74,25 @@ class ReceiptSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     receipt_number: str
+    customer_id: uuid.UUID | None
     customer_name: str | None
     salesperson: str | None
     total_minor: int
     status: str
     created_at: datetime
+
+
+class DailyAccountBreakdown(BaseModel):
+    account_name: str
+    currency: str
+    count: int
+    amount_minor: int          # original tender summed (in the account's currency)
+    dalasi_value_minor: int    # dalasi value summed
+
+
+class DailySummary(BaseModel):
+    date_from: date
+    date_to: date
+    receipt_count: int
+    total_minor: int           # sum of receipt totals (dalasi)
+    by_account: list[DailyAccountBreakdown]

@@ -1,7 +1,11 @@
 import re
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+import csv
+import io
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 
 from app.api.deps import DbSession
@@ -10,6 +14,12 @@ from app.schemas.product import ProductCreate, ProductRead, ProductUpdate
 
 router = APIRouter()
 
+
+TEMPLATE_HEADERS = [
+    "manufacturer_code", "brand", "category", "unit", "barcode",
+    "selling_price", "selling_currency", "cost_price", "cost_currency",
+    "reorder_level", "track_stock", "description",
+]
 
 def _slug(s: str | None) -> str:
     return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
@@ -59,6 +69,7 @@ async def create_product(payload: ProductCreate, db: DbSession) -> Product:
         unit=payload.unit,
         description=payload.description,
         image_url=payload.image_url,
+        details_url=payload.details_url,
     )
     db.add(product)
     await db.commit()
@@ -90,3 +101,42 @@ async def delete_product(product_id: uuid.UUID, db: DbSession) -> None:
         raise HTTPException(status_code=404, detail="Product not found")
     await db.delete(product)
     await db.commit()
+
+@router.get("/export")
+async def export_products(db: DbSession) -> Response:
+    result = await db.scalars(
+        select(Product).order_by(Product.name)
+    )
+
+    products = result.all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+
+    writer.writerow(TEMPLATE_HEADERS)
+
+    for product in products:
+        writer.writerow([
+            product.manufacturer_code,
+            product.brand,
+            product.category,
+            product.unit,
+            product.barcode,
+            product.price_minor,
+            product.selling_currency,
+            product.cost_price_minor,
+            product.cost_currency,
+            product.reorder_level,
+            product.track_stock,
+            product.description,
+        ])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": (
+                "attachment; filename=azimex_items_export.csv"
+            )
+        },
+    )

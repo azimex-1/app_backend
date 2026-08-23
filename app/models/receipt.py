@@ -15,6 +15,9 @@ class Receipt(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "receipts"
 
     receipt_number: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     customer_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     salesperson: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)

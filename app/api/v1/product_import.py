@@ -24,6 +24,18 @@ SUPPORTED_CURRENCIES = {"GMD", "EUR", "USD", "GBP", "CNY", "AED"}
 TRUE_VALUES = {"true", "yes", "1", "y"}
 FALSE_VALUES = {"false", "no", "0", "n"}
 
+# Fields an existing item may be UPDATED on (key fields + name/sku/quantity excluded).
+UPDATE_FIELDS = [
+    "category", "unit", "barcode", "price_minor", "selling_currency",
+    "cost_price_minor", "cost_currency", "reorder_level", "track_stock", "description",
+]
+FIELD_LABELS = {
+    "category": "category", "unit": "unit", "barcode": "barcode",
+    "price_minor": "selling price", "selling_currency": "selling currency",
+    "cost_price_minor": "cost price", "cost_currency": "cost currency",
+    "reorder_level": "reorder level", "track_stock": "track stock", "description": "description",
+}
+
 WARN_BARCODE_EXISTS = "Barcode already exists in the system"
 WARN_DUP_ITEM_DB = "Possible duplicate of an existing item (same barcode & code)"
 WARN_DUP_ITEM_FILE = "Possible duplicate item in file (same barcode & code)"
@@ -49,6 +61,8 @@ class ImportRowResult(BaseModel):
     status: Literal["ready", "warning", "error"]
     errors: list[str]
     warnings: list[str]
+    is_update: bool = False
+    changed_fields: list[str] = []
 
 
 class ImportIssue(BaseModel):
@@ -75,6 +89,7 @@ class ImportPreview(BaseModel):
 class ImportResult(BaseModel):
     success: bool
     imported: int
+    updated: int = 0
     total: int
     errors: int
     message: str
@@ -103,17 +118,17 @@ async def _load_reference(db: DbSession):
     brands = {b.lower(): b for b in (await db.scalars(select(Brand.name))).all()}
     categories = {c.lower(): c for c in (await db.scalars(select(Category.name))).all()}
     units = {u.lower(): u for u in (await db.scalars(select(Unit.name))).all()}
-    existing_pairs: set[tuple[str, str]] = set()
+    existing_by_key: dict[tuple[str, str], Product] = {}
     existing_barcodes: set[str] = set()
     existing_barcode_slugs: set[tuple[str, str]] = set()
     for prod in (await db.scalars(select(Product))).all():
         if prod.brand and prod.manufacturer_code:
-            existing_pairs.add((prod.brand.lower(), prod.manufacturer_code.upper()))
+            existing_by_key[(prod.brand.lower(), prod.manufacturer_code.upper())] = prod
         if prod.barcode:
             existing_barcodes.add(prod.barcode)
             if prod.manufacturer_code:
                 existing_barcode_slugs.add((prod.barcode, _slug(prod.manufacturer_code)))
-    return brands, categories, units, existing_pairs, existing_barcodes, existing_barcode_slugs
+    return brands, categories, units, existing_by_key, existing_barcodes, existing_barcode_slugs
 
 
 def _read_text(raw: bytes) -> str:
@@ -124,7 +139,7 @@ def _read_text(raw: bytes) -> str:
 
 
 def _validate(text: str, refs):
-    (brands, categories, units, existing_pairs,
+    (brands, categories, units, existing_by_key,
      existing_barcodes, existing_barcode_slugs) = refs
 
     reader = csv.DictReader(io.StringIO(text))
@@ -164,6 +179,7 @@ def _validate(text: str, refs):
     unknown_units: dict[str, list[int]] = {}
     other_errors: dict[str, list[int]] = {}
     warn_groups: dict[str, list[int]] = {}
+    update_rows: list[int] = []
 
     def err(bucket: dict, key: str, i: int):
         bucket.setdefault(key, []).append(i)
@@ -213,9 +229,6 @@ def _validate(text: str, refs):
                 errors.append("Duplicate brand + manufacturer_code within the file")
                 err(other_errors, "Duplicate brand + manufacturer_code within the file", i)
             seen_pairs.add(pair)
-            if pair in existing_pairs:
-                errors.append("This brand + manufacturer_code already exists")
-                err(other_errors, "This brand + manufacturer_code already exists", i)
 
         # Barcode + similar-code checks (warnings)
         if barcode:
@@ -283,10 +296,6 @@ def _validate(text: str, refs):
             errors.append("description is too long (max 1000)")
             err(other_errors, "description is too long (max 1000)", i)
 
-        status: Literal["ready", "warning", "error"] = (
-            "error" if errors else ("warning" if warnings else "ready")
-        )
-
         parsed: dict | None = None
         if not errors:
             parsed = {
@@ -304,10 +313,30 @@ def _validate(text: str, refs):
                 "description": description or None,
             }
 
+        # Existing item (same brand + code)? -> UPDATE (warning), not an error.
+        is_update = False
+        changed_fields: list[str] = []
+        if parsed is not None and code and brand:
+            existing = existing_by_key.get((brand.lower(), code))
+            if existing is not None:
+                is_update = True
+                update_rows.append(i)
+                for f in UPDATE_FIELDS:
+                    if parsed[f] != getattr(existing, f):
+                        changed_fields.append(FIELD_LABELS[f])
+                warnings.append(
+                    "Updates existing item" + (f" ({', '.join(changed_fields)})" if changed_fields else " (no field changes)")
+                )
+
+        status: Literal["ready", "warning", "error"] = (
+            "error" if errors else ("warning" if (warnings or is_update) else "ready")
+        )
+
         rows.append((
             ImportRowResult(
                 row=i, manufacturer_code=code or None, brand=brand or None,
                 status=status, errors=errors, warnings=warnings,
+                is_update=is_update, changed_fields=changed_fields,
             ),
             parsed,
         ))
@@ -332,6 +361,12 @@ def _validate(text: str, refs):
     for msg, rowlist in warn_groups.items():
         issues.append(ImportIssue(kind="other", label=msg, severity="warning",
                                   count=len(rowlist), rows=rowlist[:50]))
+    if update_rows:
+        issues.append(ImportIssue(
+            kind="existing_update",
+            label="Already in the system — will be updated, not duplicated",
+            severity="warning", count=len(update_rows), rows=update_rows[:50],
+        ))
 
     # errors first, actionable first, then by count desc
     issues.sort(key=lambda g: (g.severity != "error", g.action is None, -g.count))
@@ -389,24 +424,38 @@ async def confirm_import(db: DbSession, file: UploadFile = File(...)) -> ImportR
             header_errors=header_errors,
         )
 
+    existing_by_key = refs[3]
     used_skus: set[str] = set()
     created = 0
+    updated = 0
     try:
         for _result, parsed in rows:
             assert parsed is not None
-            base = (f"{_slug(parsed['brand'])}-{_slug(parsed['manufacturer_code'])}"
-                    if parsed["brand"] else _slug(parsed["manufacturer_code"]))
-            base = base.strip("-") or "ITEM"
-            sku = await _unique_sku(db, base, used_skus)
-            name = _build_name(parsed["brand"], parsed["category"], parsed["manufacturer_code"])
-            db.add(Product(name=name, sku=sku, **parsed))
-            created += 1
+            existing = existing_by_key.get((parsed["brand"].lower(), parsed["manufacturer_code"]))
+            if existing is not None:
+                for f in UPDATE_FIELDS:
+                    setattr(existing, f, parsed[f])
+                updated += 1
+            else:
+                base = (f"{_slug(parsed['brand'])}-{_slug(parsed['manufacturer_code'])}"
+                        if parsed["brand"] else _slug(parsed["manufacturer_code"]))
+                base = base.strip("-") or "ITEM"
+                sku = await _unique_sku(db, base, used_skus)
+                name = _build_name(parsed["brand"], parsed["category"], parsed["manufacturer_code"])
+                db.add(Product(name=name, sku=sku, **parsed))
+                created += 1
         await db.commit()
     except Exception:
         await db.rollback()
         raise HTTPException(status_code=500, detail="Import failed while saving; nothing was written.")
 
+    parts = []
+    if created:
+        parts.append(f"imported {created} new")
+    if updated:
+        parts.append(f"updated {updated}")
+    msg = (", ".join(parts).capitalize() + " item(s).") if parts else "Nothing to import."
     return ImportResult(
-        success=True, imported=created, total=len(rows), errors=0,
-        message=f"Imported {created} item(s).", header_errors=header_errors,
+        success=True, imported=created, updated=updated, total=len(rows), errors=0,
+        message=msg, header_errors=header_errors,
     )

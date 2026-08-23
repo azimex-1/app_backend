@@ -22,6 +22,7 @@ class ProductCreate(BaseModel):
     unit: str | None = Field(default=None, max_length=40)
     description: str | None = Field(default=None, max_length=1000)
     image_url: str | None = Field(default=None, max_length=500)
+    details_url: str | None = Field(default=None, max_length=500)
 
 
 class ProductUpdate(BaseModel):
@@ -43,6 +44,8 @@ class ProductUpdate(BaseModel):
     unit: str | None = Field(default=None, max_length=40)
     description: str | None = Field(default=None, max_length=1000)
     image_url: str | None = Field(default=None, max_length=500)
+    details_url: str | None = Field(default=None, max_length=500)
+
 
 
 class ProductRead(BaseModel):
@@ -67,3 +70,4 @@ class ProductRead(BaseModel):
     unit: str | None
     description: str | None
     image_url: str | None
+    details_url: str | None
