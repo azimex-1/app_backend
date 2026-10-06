@@ -1,0 +1,10 @@
+from pydantic import BaseModel, Field
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    new_password: str = Field(min_length=8, max_length=72)
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=72)

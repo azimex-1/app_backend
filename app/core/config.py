@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     # postgresql+asyncpg://user:password@host:5432/dbname
     DATABASE_URL: str
     SECRET_KEY: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 600
     JWT_ALGORITHM: str = "HS256"
     ENVIRONMENT: str = "development"
 

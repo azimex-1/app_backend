@@ -1,11 +1,14 @@
+import uuid
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import CurrentUser, DbSession, require_permission
 from app.core.security import create_access_token, hash_password, verify_password
+from app.schemas.password import ChangePasswordRequest, ResetPasswordRequest
 from app.core.utils import slugify
 from app.models.organization import Organization
 from app.models.user import User
@@ -73,3 +76,31 @@ async def login(
 @router.get("/me", response_model=UserRead)
 async def read_me(user: CurrentUser) -> User:
     return user
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_my_password(
+    payload: ChangePasswordRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> None:
+    """The logged-in user changes their own password (must prove the current one)."""
+    if not verify_password(payload.current_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    user.hashed_password = hash_password(payload.new_password)
+    await db.commit()
+
+
+@router.post("/users/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_user_password(
+    user_id: uuid.UUID,
+    payload: ResetPasswordRequest,
+    db: DbSession,
+    current: Annotated[User, Depends(require_permission("user.manage"))],
+) -> None:
+    """An admin/owner sets a new password for another user in their org."""
+    target = await db.scalar(select(User).where(User.id == user_id))
+    if target is None or target.organization_id != current.organization_id:
+        raise HTTPException(status_code=404, detail="User not found")
+    target.hashed_password = hash_password(payload.new_password)
+    await db.commit()
