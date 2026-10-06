@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.models.payment import PaymentAccount, PaymentType
 from app.models.pos_session import CashMovement, PosSession
 from app.models.receipt import Receipt, ReceiptPayment
@@ -153,7 +153,11 @@ async def _build_report(db: DbSession, session: PosSession) -> SessionReport:
 
 
 @router.post("/open", response_model=PosSessionRead, status_code=status.HTTP_201_CREATED)
-async def open_session(payload: SessionOpen, db: DbSession) -> PosSession:
+async def open_session(
+    payload: SessionOpen,
+    db: DbSession,
+    _=Depends(require_permission("pos.session.manage")),
+) -> PosSession:
     if await _current_open(db) is not None:
         raise HTTPException(status_code=409, detail="A session is already open. Close it first.")
     session = PosSession(
@@ -168,12 +172,19 @@ async def open_session(payload: SessionOpen, db: DbSession) -> PosSession:
 
 
 @router.get("/current", response_model=PosSessionRead | None)
-async def current_session(db: DbSession) -> PosSession | None:
+async def current_session(
+    db: DbSession,
+    _=Depends(require_permission("pos.access")),
+) -> PosSession | None:
     return await _current_open(db)
 
 
 @router.get("/{session_id}/report", response_model=SessionReport)
-async def session_report(session_id: uuid.UUID, db: DbSession) -> SessionReport:
+async def session_report(
+    session_id: uuid.UUID,
+    db: DbSession,
+    _=Depends(require_permission("pos.access")),
+) -> SessionReport:
     session = await db.get(PosSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -181,7 +192,12 @@ async def session_report(session_id: uuid.UUID, db: DbSession) -> SessionReport:
 
 
 @router.post("/{session_id}/cash-movements", response_model=CashMovementRead, status_code=status.HTTP_201_CREATED)
-async def add_movement(session_id: uuid.UUID, payload: CashMovementCreate, db: DbSession) -> CashMovement:
+async def add_movement(
+    session_id: uuid.UUID,
+    payload: CashMovementCreate,
+    db: DbSession,
+    _=Depends(require_permission("pos.cash_movement")),
+) -> CashMovement:
     session = await db.get(PosSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -200,7 +216,12 @@ async def add_movement(session_id: uuid.UUID, payload: CashMovementCreate, db: D
 
 
 @router.post("/{session_id}/close", response_model=SessionReport)
-async def close_session(session_id: uuid.UUID, payload: SessionClose, db: DbSession) -> SessionReport:
+async def close_session(
+    session_id: uuid.UUID,
+    payload: SessionClose,
+    db: DbSession,
+    _=Depends(require_permission("pos.session.manage")),
+) -> SessionReport:
     session = await db.get(PosSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")

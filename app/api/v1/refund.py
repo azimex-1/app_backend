@@ -1,10 +1,10 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.models.payment import PaymentAccount
 from app.models.receipt import Receipt, ReceiptItem
 from app.models.refund import RefundDocument, RefundLine
@@ -37,7 +37,11 @@ async def _load_receipt(db: DbSession, receipt_id: uuid.UUID) -> Receipt:
 
 
 @router.get("/{receipt_id}/refundable", response_model=RefundableReceipt)
-async def get_refundable(receipt_id: uuid.UUID, db: DbSession) -> RefundableReceipt:
+async def get_refundable(
+    receipt_id: uuid.UUID,
+    db: DbSession,
+    _=Depends(require_permission("pos.refund")),
+) -> RefundableReceipt:
     receipt = await _load_receipt(db, receipt_id)
     refunded = await _refunded_by_item(db, receipt_id)
 
@@ -69,7 +73,12 @@ async def get_refundable(receipt_id: uuid.UUID, db: DbSession) -> RefundableRece
 
 
 @router.post("/{receipt_id}/refunds", response_model=RefundRead, status_code=status.HTTP_201_CREATED)
-async def create_refund(receipt_id: uuid.UUID, payload: RefundCreate, db: DbSession) -> RefundDocument:
+async def create_refund(
+    receipt_id: uuid.UUID,
+    payload: RefundCreate,
+    db: DbSession,
+    _=Depends(require_permission("pos.refund")),
+) -> RefundDocument:
     receipt = await _load_receipt(db, receipt_id)
     refunded = await _refunded_by_item(db, receipt_id)
     items_by_id = {item.id: item for item in receipt.items}
