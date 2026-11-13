@@ -1,10 +1,10 @@
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import Depends, APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.models.customer import Customer, CustomerLedgerEntry
 from app.schemas.customer_ledger import (
     AdjustmentCreate,
@@ -24,7 +24,7 @@ async def _require_customer(db: DbSession, customer_id: uuid.UUID) -> Customer:
 
 
 @router.get("/{customer_id}/ledger", response_model=CustomerLedgerResponse)
-async def get_ledger(customer_id: uuid.UUID, db: DbSession) -> CustomerLedgerResponse:
+async def get_ledger(customer_id: uuid.UUID, db: DbSession, _=Depends(require_permission("customers.view"))) -> CustomerLedgerResponse:
     customer = await _require_customer(db, customer_id)
 
     entries = (
@@ -61,7 +61,7 @@ async def get_ledger(customer_id: uuid.UUID, db: DbSession) -> CustomerLedgerRes
 
 
 @router.post("/{customer_id}/payments", status_code=status.HTTP_201_CREATED)
-async def record_payment(customer_id: uuid.UUID, payload: PaymentCreate, db: DbSession):
+async def record_payment(customer_id: uuid.UUID, payload: PaymentCreate, db: DbSession, _=Depends(require_permission("customers.manage"))):
     await _require_customer(db, customer_id)
     entry = CustomerLedgerEntry(
         customer_id=customer_id,
@@ -79,7 +79,7 @@ async def record_payment(customer_id: uuid.UUID, payload: PaymentCreate, db: DbS
 
 
 @router.post("/{customer_id}/adjustments", status_code=status.HTTP_201_CREATED)
-async def add_adjustment(customer_id: uuid.UUID, payload: AdjustmentCreate, db: DbSession):
+async def add_adjustment(customer_id: uuid.UUID, payload: AdjustmentCreate, db: DbSession, _=Depends(require_permission("customers.manage"))):
     await _require_customer(db, customer_id)
     entry = CustomerLedgerEntry(
         customer_id=customer_id,

@@ -1,16 +1,20 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.api.v1.reference import _make_reference_router
 from app.models.payment import PaymentAccount, PaymentType
 from app.schemas.payment import PaymentAccountCreate, PaymentAccountRead, PaymentAccountUpdate
 
 # PaymentType is name-only -> reuse the reference factory (idempotent create).
-payment_types_router = _make_reference_router(PaymentType)
+# Cashiers must be able to read payment methods at checkout (pos.access),
+# while only managers create/edit them (settings.manage).
+payment_types_router = _make_reference_router(
+    PaymentType, view_permission="pos.access", manage_permission="settings.manage"
+)
 
 accounts_router = APIRouter()
 
@@ -26,7 +30,7 @@ async def _with_type(db: DbSession, account_id: uuid.UUID) -> PaymentAccount:
 
 
 @accounts_router.get("", response_model=list[PaymentAccountRead])
-async def list_accounts(db: DbSession, active_only: bool = False):
+async def list_accounts(db: DbSession, _=Depends(require_permission("pos.access")), active_only: bool = False):
     stmt = select(PaymentAccount).options(selectinload(PaymentAccount.type)).order_by(PaymentAccount.name)
     if active_only:
         stmt = stmt.where(PaymentAccount.is_active.is_(True))
@@ -35,7 +39,7 @@ async def list_accounts(db: DbSession, active_only: bool = False):
 
 
 @accounts_router.post("", response_model=PaymentAccountRead, status_code=status.HTTP_201_CREATED)
-async def create_account(payload: PaymentAccountCreate, db: DbSession):
+async def create_account(payload: PaymentAccountCreate, db: DbSession, _=Depends(require_permission("settings.manage"))):
     if await db.get(PaymentType, payload.type_id) is None:
         raise HTTPException(status_code=400, detail="Unknown payment type")
     clash = await db.scalar(
@@ -57,7 +61,7 @@ async def create_account(payload: PaymentAccountCreate, db: DbSession):
 
 
 @accounts_router.put("/{account_id}", response_model=PaymentAccountRead)
-async def update_account(account_id: uuid.UUID, payload: PaymentAccountUpdate, db: DbSession):
+async def update_account(account_id: uuid.UUID, payload: PaymentAccountUpdate, db: DbSession, _=Depends(require_permission("settings.manage"))):
     acc = await db.get(PaymentAccount, account_id)
     if acc is None:
         raise HTTPException(status_code=404, detail="Payment account not found")

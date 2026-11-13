@@ -2,12 +2,12 @@ import csv
 import io
 from typing import Literal
 
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import Depends, APIRouter, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.v1.products import _build_name, _slug
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.models.product import Product
 from app.models.reference import Brand, Category, Unit
 
@@ -98,7 +98,7 @@ class ImportResult(BaseModel):
 
 # ── Export template ──
 @router.get("/template")
-async def download_template() -> Response:
+async def download_template(_=Depends(require_permission("inventory.manage"))) -> Response:
     example = [
         "OX123", "MANN", "Oil Filter", "piece", "4009026501234",
         "250", "GMD", "", "", "5", "TRUE", "Spin-on oil filter",
@@ -376,7 +376,7 @@ def _validate(text: str, refs):
 
 # ── Preview ──
 @router.post("/preview", response_model=ImportPreview)
-async def preview_import(db: DbSession, file: UploadFile = File(...)) -> ImportPreview:
+async def preview_import(db: DbSession, _=Depends(require_permission("inventory.manage")), file: UploadFile = File(...)) -> ImportPreview:
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a .csv file")
 
@@ -408,7 +408,7 @@ async def _unique_sku(db: DbSession, base: str, used: set[str]) -> str:
 
 
 @router.post("/confirm", response_model=ImportResult)
-async def confirm_import(db: DbSession, file: UploadFile = File(...)) -> ImportResult:
+async def confirm_import(db: DbSession, _=Depends(require_permission("inventory.manage")), file: UploadFile = File(...)) -> ImportResult:
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a .csv file")
 

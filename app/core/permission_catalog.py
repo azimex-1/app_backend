@@ -26,4 +26,7 @@ PERMISSION_CATALOG: list[tuple[str, str]] = [
     # Administration
     ("user.manage", "Manage users"),
     ("role.manage", "Manage roles & permissions"),
+    ("branch.manage", "Manage branches"),
+    ("organization.manage", "Manage organization settings"),
+    ("settings.manage", "Manage settings (payment accounts, currency rates)"),
 ]

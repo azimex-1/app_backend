@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, timedelta
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, or_, select
@@ -10,7 +11,9 @@ from app.models.customer import Customer, CustomerLedgerEntry
 from app.models.payment import PaymentAccount
 from app.models.product import Product
 from app.models.receipt import Receipt, ReceiptItem, ReceiptPayment
+from app.models.user import User
 from app.schemas.receipt import DailyAccountBreakdown, DailySummary, ReceiptCreate, ReceiptRead, ReceiptSummary
+from app.services.stock import deduct_sale
 
 router = APIRouter()
 
@@ -32,7 +35,7 @@ async def _outstanding_minor(db: DbSession, customer_id: uuid.UUID) -> int:
 async def create_receipt(
     payload: ReceiptCreate,
     db: DbSession,
-    _=Depends(require_permission("pos.access")),
+    current: Annotated[User, Depends(require_permission("pos.access"))],
 ) -> Receipt:
     # ── Items (server computes the money) ──
     product_ids = [i.product_id for i in payload.items]
@@ -111,6 +114,20 @@ async def create_receipt(
         items=items, payments=payments,
     )
     db.add(receipt)
+
+    # ── Deduct stock across each item's locations, by global priority order ──
+    # Walks priority 0 first, spills to the next when a shelf runs dry, and
+    # never blocks the sale (short stock pushes the last location negative).
+    for line in payload.items:
+        product = products[line.product_id]
+        if product.track_stock:
+            await deduct_sale(
+                db,
+                product_id=product.id,
+                quantity=line.quantity,
+                reference=receipt.receipt_number,
+                created_by=current.id,
+            )
 
     # Wire the credit portion into the customer ledger as an invoice DEBIT.
     if credit > 0 and customer is not None:

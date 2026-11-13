@@ -1,9 +1,9 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import Depends, APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.models.saved_ticket import SavedTicket
 from app.schemas.saved_ticket import SavedTicketCreate, SavedTicketDetail, SavedTicketSummary
 
@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.post("", response_model=SavedTicketDetail, status_code=status.HTTP_201_CREATED)
-async def create_ticket(payload: SavedTicketCreate, db: DbSession) -> SavedTicket:
+async def create_ticket(payload: SavedTicketCreate, db: DbSession, _=Depends(require_permission("pos.access"))) -> SavedTicket:
     ticket = SavedTicket(
         name=payload.name.strip(),
         customer_id=payload.customer_id,
@@ -26,7 +26,7 @@ async def create_ticket(payload: SavedTicketCreate, db: DbSession) -> SavedTicke
 
 
 @router.get("", response_model=list[SavedTicketSummary])
-async def list_tickets(db: DbSession) -> list[SavedTicketSummary]:
+async def list_tickets(db: DbSession, _=Depends(require_permission("pos.access"))) -> list[SavedTicketSummary]:
     result = await db.scalars(select(SavedTicket).order_by(SavedTicket.created_at.desc()))
     tickets = result.all()
     return [
@@ -43,7 +43,7 @@ async def list_tickets(db: DbSession) -> list[SavedTicketSummary]:
 
 
 @router.get("/{ticket_id}", response_model=SavedTicketDetail)
-async def get_ticket(ticket_id: uuid.UUID, db: DbSession) -> SavedTicket:
+async def get_ticket(ticket_id: uuid.UUID, db: DbSession, _=Depends(require_permission("pos.access"))) -> SavedTicket:
     ticket = await db.get(SavedTicket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Saved ticket not found")
@@ -51,7 +51,7 @@ async def get_ticket(ticket_id: uuid.UUID, db: DbSession) -> SavedTicket:
 
 
 @router.delete("/{ticket_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_ticket(ticket_id: uuid.UUID, db: DbSession):
+async def delete_ticket(ticket_id: uuid.UUID, db: DbSession, _=Depends(require_permission("pos.access"))):
     ticket = await db.get(SavedTicket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Saved ticket not found")

@@ -1,25 +1,15 @@
 import re
 import uuid
 
-import csv
-import io
-from typing import Literal
-
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import Depends, APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductRead, ProductUpdate
 
 router = APIRouter()
 
-
-TEMPLATE_HEADERS = [
-    "manufacturer_code", "brand", "category", "unit", "barcode",
-    "selling_price", "selling_currency", "cost_price", "cost_currency",
-    "reorder_level", "track_stock", "description",
-]
 
 def _slug(s: str | None) -> str:
     return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
@@ -41,13 +31,13 @@ async def _generate_sku(db: DbSession, brand: str | None, code: str) -> str:
 
 
 @router.get("", response_model=list[ProductRead])
-async def list_products(db: DbSession) -> list[Product]:
+async def list_products(db: DbSession, _=Depends(require_permission("inventory.view"))) -> list[Product]:
     result = await db.scalars(select(Product).order_by(Product.name))
     return list(result.all())
 
 
 @router.post("", response_model=ProductRead, status_code=status.HTTP_201_CREATED)
-async def create_product(payload: ProductCreate, db: DbSession) -> Product:
+async def create_product(payload: ProductCreate, db: DbSession, _=Depends(require_permission("inventory.manage"))) -> Product:
     code = payload.manufacturer_code.strip().upper()  # normalize to CAPS
     sku = await _generate_sku(db, payload.brand, code)
     name = payload.name or _build_name(payload.brand, payload.category, code)
@@ -69,7 +59,6 @@ async def create_product(payload: ProductCreate, db: DbSession) -> Product:
         unit=payload.unit,
         description=payload.description,
         image_url=payload.image_url,
-        details_url=payload.details_url,
     )
     db.add(product)
     await db.commit()
@@ -78,7 +67,7 @@ async def create_product(payload: ProductCreate, db: DbSession) -> Product:
 
 
 @router.put("/{product_id}", response_model=ProductRead)
-async def update_product(product_id: uuid.UUID, payload: ProductUpdate, db: DbSession) -> Product:
+async def update_product(product_id: uuid.UUID, payload: ProductUpdate, db: DbSession, _=Depends(require_permission("inventory.manage"))) -> Product:
     product = await db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -94,49 +83,10 @@ async def update_product(product_id: uuid.UUID, payload: ProductUpdate, db: DbSe
 
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_product(product_id: uuid.UUID, db: DbSession) -> None:
+async def delete_product(product_id: uuid.UUID, db: DbSession, _=Depends(require_permission("inventory.manage"))) -> None:
     # Hard delete for now; becomes soft delete once sales reference products.
     product = await db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     await db.delete(product)
     await db.commit()
-
-@router.get("/export")
-async def export_products(db: DbSession) -> Response:
-    result = await db.scalars(
-        select(Product).order_by(Product.name)
-    )
-
-    products = result.all()
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-
-    writer.writerow(TEMPLATE_HEADERS)
-
-    for product in products:
-        writer.writerow([
-            product.manufacturer_code,
-            product.brand,
-            product.category,
-            product.unit,
-            product.barcode,
-            product.price_minor,
-            product.selling_currency,
-            product.cost_price_minor,
-            product.cost_currency,
-            product.reorder_level,
-            product.track_stock,
-            product.description,
-        ])
-
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": (
-                "attachment; filename=azimex_items_export.csv"
-            )
-        },
-    )

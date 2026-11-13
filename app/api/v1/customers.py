@@ -1,9 +1,9 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import Depends, APIRouter, HTTPException, status
 from sqlalchemy import or_, select
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, require_permission
 from app.models.customer import Customer
 from app.schemas.customer import CustomerCreate, CustomerRead, CustomerUpdate
 
@@ -13,6 +13,7 @@ router = APIRouter()
 @router.get("", response_model=list[CustomerRead])
 async def list_customers(
     db: DbSession,
+    _=Depends(require_permission("customers.view")),
     q: str | None = None,
     customer_type: str | None = None,
     status: str | None = None,
@@ -38,7 +39,7 @@ async def list_customers(
 
 
 @router.post("", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)
-async def create_customer(payload: CustomerCreate, db: DbSession) -> Customer:
+async def create_customer(payload: CustomerCreate, db: DbSession, _=Depends(require_permission("customers.manage"))) -> Customer:
     customer = Customer(**payload.model_dump())
     db.add(customer)
     await db.commit()
@@ -47,7 +48,7 @@ async def create_customer(payload: CustomerCreate, db: DbSession) -> Customer:
 
 
 @router.get("/{customer_id}", response_model=CustomerRead)
-async def get_customer(customer_id: uuid.UUID, db: DbSession) -> Customer:
+async def get_customer(customer_id: uuid.UUID, db: DbSession, _=Depends(require_permission("customers.view"))) -> Customer:
     customer = await db.get(Customer, customer_id)
     if customer is None:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -55,7 +56,7 @@ async def get_customer(customer_id: uuid.UUID, db: DbSession) -> Customer:
 
 
 @router.put("/{customer_id}", response_model=CustomerRead)
-async def update_customer(customer_id: uuid.UUID, payload: CustomerUpdate, db: DbSession) -> Customer:
+async def update_customer(customer_id: uuid.UUID, payload: CustomerUpdate, db: DbSession, _=Depends(require_permission("customers.manage"))) -> Customer:
     customer = await db.get(Customer, customer_id)
     if customer is None:
         raise HTTPException(status_code=404, detail="Customer not found")
